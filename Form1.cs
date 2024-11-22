@@ -1,26 +1,37 @@
-using System;
 using System.Data;
+using System.Diagnostics;
 using System.IO.Ports;
-using System.Text;
-using System.Threading.Tasks;
-using System.Windows.Forms;
 
 namespace proyecto_final
 {
     public partial class Form1 : Form
     {
-        private SerialPort Arduino;
-        private DataTable dataTable;
-        private StringBuilder dataBuffer = new StringBuilder();
+        System.IO.Ports.SerialPort Arduino;
+        //timer
+        private System.Windows.Forms.Timer timer;
+        private DataTable dataTable; // Agregar esta línea para declarar dataTable
+
+        // Variables para almacenar temporalmente los datos de un registro
+        private string currentUid;
+        private string currentNameOrStatus;
+        private string currentDate;
+        private string currentTime;
 
         public Form1()
         {
+            //InitializeComponent();
             InitializeComponent();
+
             InitializeDataTable();
+            //timer = new System.Windows.Forms.Timer();
+            //// Intervalo en milisegundos (1 segundo)
+            //timer.Interval = 1000;
+            //timer.Tick += Timer_Tick;
+            //timer.Start();
 
             try
             {
-                Arduino = new SerialPort("COM3", 9600);
+                Arduino = new System.IO.Ports.SerialPort("COM3", 9600);
                 Arduino.DataReceived += SerialPort_DataReceived;
                 Arduino.Open();
             }
@@ -28,74 +39,61 @@ namespace proyecto_final
             {
                 MessageBox.Show($"Error al abrir el puerto COM: {ex.Message}");
             }
-        }
 
+        }
         private void SerialPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
         {
-            try
-            {
-                string incomingData = Arduino.ReadExisting();
-                dataBuffer.Append(incomingData);
+            // Leer los datos desde el puerto serial
+            string incomingData = Arduino.ReadLine().Trim();
+            //string incomingData = serialPort.ReadLine().Trim();
 
-                // Procesar en un hilo de fondo
-                Task.Run(() => ProcessBufferedData());
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error al leer del puerto serial: {ex.Message}");
-            }
+            // Procesar los datos en el hilo principal
+            Invoke(new Action(() => ProcessIncomingData(incomingData)));
         }
 
-        private void ProcessBufferedData()
-        {
-            try
-            {
-                string data = dataBuffer.ToString();
-                int newLineIndex;
-
-                while ((newLineIndex = data.IndexOf('\n')) >= 0)
-                {
-                    string line = data.Substring(0, newLineIndex).Trim();
-                    dataBuffer.Remove(0, newLineIndex + 1);
-                    ProcessIncomingData(line);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error al procesar datos: {ex.Message}");
-            }
-        }
 
         private void ProcessIncomingData(string data)
         {
             try
             {
+                Debug.WriteLine("Datos recibidos: " + data);
                 string[] parts = data.Split(',');
-                if (parts.Length >= 4)
+
+                if (parts.Length >= 2)
                 {
-                    string uid = parts[0].Replace("UID: ", "").Trim();
-                    string nameOrStatus = parts[1].Trim();
-                    string date = parts[2].Replace("Fecha: ", "").Trim();
-                    string time = parts[3].Replace("Hora: ", "").Trim();
+                    // Procesar UID y Nombre/Estado
+                    currentUid = parts[0].Replace("UID: ", "").Trim();
+                    currentNameOrStatus = parts[1].Trim();
 
-                    // Actualizar la UI de manera segura
-                    this.Invoke(new Action(() =>
+                    // Inicializar variables para fecha y hora
+                    currentDate = parts.Length > 2 && parts[2].StartsWith("Fecha:") ? parts[2].Replace("Fecha: ", "").Trim() : string.Empty;
+                    currentTime = parts.Length > 3 && parts[3].StartsWith("Hora:") ? parts[3].Replace("Hora: ", "").Trim() : string.Empty;
+
+                    // Verificar si el UID ya existe en el DataTable
+                    DataRow existingRow = dataTable.AsEnumerable().FirstOrDefault(row => row.Field<string>("ID Tarjeta") == currentUid);
+
+                    if (existingRow != null)
                     {
-                        lbltest.Text = $"UID: {uid}\nPropietario: {nameOrStatus}\nFecha: {date}\nHora: {time}";
-
-                        // Verificar si el UID ya existe en el DataTable
-                        if (!dataTable.AsEnumerable().Any(row => row.Field<string>("ID Tarjeta") == uid))
+                        // Si existe y el estado es acceso denegado, agregar una nueva fila
+                        if (currentNameOrStatus.Equals("acceso denegado", StringComparison.OrdinalIgnoreCase))
                         {
-                            dataTable.Rows.Add(uid, nameOrStatus, date, time);
+                            dataTable.Rows.Add(currentUid, currentNameOrStatus, currentDate, currentTime, string.Empty); // Hora de salida vacía
                         }
-                    }));
-
-                    // Opcional: Muestra en la consola para depuración
-                    Console.WriteLine($"UID: {uid}, Propietario: {nameOrStatus}, Fecha: {date}, Hora: {time}");
+                        else
+                        {
+                            // Si no es acceso denegado, actualizar la hora de salida
+                            existingRow["Hora Salida"] = currentTime; // Asignar la hora de salida
+                        }
+                    }
+                    else if (!string.IsNullOrEmpty(currentUid))
+                    {
+                        // Agregar la fila al DataTable si no existe
+                        dataTable.Rows.Add(currentUid, currentNameOrStatus, currentDate, currentTime);
+                    }
                 }
                 else
                 {
-                    Console.WriteLine("Formato de datos incorrecto: " + data);
+                    Console.WriteLine("Datos no reconocidos: " + data);
                 }
             }
             catch (Exception ex)
@@ -110,112 +108,156 @@ namespace proyecto_final
             dataTable.Columns.Add("ID Tarjeta", typeof(string));
             dataTable.Columns.Add("Propietario", typeof(string));
             dataTable.Columns.Add("Fecha", typeof(string));
-            dataTable.Columns.Add("Hora", typeof(string));
-
-            dataGridView1.DataSource = dataTable;
+            dataTable.Columns.Add("Hora Entrada", typeof(string));
+            dataTable.Columns.Add("Hora Salida", typeof(string)); // Nueva columna para la hora de salida
+            dataGridView1.DataSource = dataTable; // Asignar DataTable al DataGridView
         }
-
-        private void btnUpdateData_Click(object sender, EventArgs e)
+        private void ProcessSerialData(string data)
         {
-            if (Arduino != null && Arduino.IsOpen)
+            // Espera datos en formato CSV: "UID,Nombre"
+            string[] parts = data.Split(',');
+            if (parts.Length == 2)
             {
-                Arduino.Write("3");
-                UpdateDataGridView();
-            }
-            else
-            {
-                MessageBox.Show("El puerto serial no está abierto o no está configurado.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
+                string uid = parts[0].Trim();
+                string nombre = parts[1].Trim();
 
-        private void UpdateDataGridView()
-        {
-            try
-            {
-                if (Arduino != null && Arduino.IsOpen)
+                // Verifica si el UID ya está registrado
+                foreach (DataRow row in dataTable.Rows)
                 {
-                    // Lee los datos del puerto serial
-                    string incomingData = Arduino.ReadLine()?.Trim(); // Lee una línea de datos y elimina espacios
-
-                    // Verifica si incomingData es nulo o vacío
-                    if (!string.IsNullOrEmpty(incomingData))
+                    if (row["UID"].ToString() == uid)
                     {
-                        // Procesa los datos como lo harías normalmente
-                        ProcessIncomingData(incomingData);
-                    }
-                    else
-                    {
-                        MessageBox.Show("No se recibieron datos del puerto serial.", "Advertencia", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return; // UID ya existe, no lo agrega
                     }
                 }
-                else
-                {
-                    MessageBox.Show("El puerto serial no está abierto o no está configurado.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error al actualizar datos: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+                // Agrega una nueva fila al DataTable
+                dataTable.Rows.Add(uid, nombre);
             }
         }
-
-        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        private void Timer_Tick(object? sender, EventArgs e) // Agregar el modificador de nulabilidad para resolver CS8622
         {
-            if (Arduino != null && Arduino.IsOpen)
-            {
-                Arduino.Close();
-            }
+            // Lógica del temporizador
         }
-
-        private void button2_Click(object sender, EventArgs e)
+        private void Form1_Load(object sender, EventArgs e)
         {
-            if (Arduino != null && Arduino.IsOpen)
-            {
-                Arduino.Write("1");
-            }
-        }
 
-        private void cerrrPuertaBtn_Click(object sender, EventArgs e)
-        {
-            if (Arduino != null && Arduino.IsOpen)
-            {
-                Arduino.Write("2");
-            }
-        }
-
-        private void lbltest_Click(object sender, EventArgs e)
-        {
-            // Acción al hacer clic en el label (opcional)
-        }
-
-        private void dataGridView1_CellContentClick(object sender, DataGridViewCellEventArgs e)
-        {
-            // Acción al hacer clic en el DataGridView (opcional)
         }
 
         private void tabPage1_Click(object sender, EventArgs e)
         {
-            // Acción al hacer clic en la tab (opcional)
+
         }
 
         private void label1_Click(object sender, EventArgs e)
         {
-            // Acción al hacer clic en el label (opcional)
-        }
 
-        private void updateDataClick(object sender, EventArgs e)
-        {
-            // Acción al hacer clic en el botón (opcional)
         }
 
         private void fecha_Click(object sender, EventArgs e)
         {
-            // Acción al hacer clic en la fecha (opcional)
+
         }
 
-        private void Form1_Load(object sender, EventArgs e)
+        private void button2_Click(object sender, EventArgs e)
         {
-            // Lógica adicional al cargar el formulario (opcional)
+            Arduino.Write("1");
+        }
+
+        private void cerrrPuertaBtn_Click(object sender, EventArgs e)
+        {
+            Arduino.Write("2");
+            //Arduino.ReadByte();
+        }
+
+        private void dataGridView1_CellContentClick(object sender, DataGridViewCellEventArgs e)
+        {
+
+        }
+
+        private void lbltest_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void btnUpdataData_Click(object sender, EventArgs e)
+        {
+            // Forzar la lectura de datos manualmente
+            try
+            {
+                // Envía un comando al Arduino para solicitar datos
+                Arduino.Write("3"); // Asegúrate de que este comando sea correcto para tu Arduino.
+
+                // Esperar un breve momento para que Arduino envíe los datos
+                System.Threading.Thread.Sleep(100); // Ajusta el tiempo según sea necesario
+
+                // Leer y procesar los datos desde el puerto serial
+                //UpdateDataGridView();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error al actualizar los datos: {ex.Message}");
+            }
+        }
+
+        // Método para actualizar manualmente el DataGridView
+        private void UpdateDataGridView()
+        {
+            try
+            {
+                // Verificar si el puerto serial está abierto
+                if (Arduino.IsOpen)
+                {
+                    string incomingData = Arduino.ReadLine().Trim(); // Lee una línea de datos
+
+                    // Procesa los datos como lo harías normalmente
+                    ProcessIncomingData(incomingData);  // Llama a tu método para procesar y agregar los datos
+                }
+                else
+                {
+                    MessageBox.Show("El puerto serial no está abierto.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error al leer los datos: {ex.Message}");
+            }
+        }
+
+        private void button1_Click(object sender, EventArgs e)
+        {
+            string filePath = @"D:\UMG\ARQ PC II\data table\datos.txt"; // Ruta completa para el archivo
+            ExportDataGridViewToTxt(filePath);
+        }
+
+        private void ExportDataGridViewToTxt(string filePath)
+        {
+            try
+            {
+                // Verificar si el directorio existe
+                string directory = Path.GetDirectoryName(filePath);
+                if (!Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory); // Crear el directorio si no existe
+                }
+
+                using (StreamWriter writer = new StreamWriter(filePath))
+                {
+                    // Escribir encabezados
+                    writer.WriteLine("ID Tarjeta, Propietario, Fecha, Hora Entrada, Hora Salida");
+
+                    // Escribir cada fila del DataTable
+                    foreach (DataRow row in dataTable.Rows)
+                    {
+                        writer.WriteLine($"{row["ID Tarjeta"]}, {row["Propietario"]}, {row["Fecha"]}, {row["Hora Entrada"]}, {row["Hora Salida"]}");
+                    }
+                }
+
+                MessageBox.Show($"Datos exportados a {filePath} exitosamente.");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error al exportar datos: {ex.Message}");
+            }
         }
     }
 }

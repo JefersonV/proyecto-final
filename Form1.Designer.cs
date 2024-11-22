@@ -34,7 +34,6 @@
             cerrarPuertaBtn = new Button();
             dataGridView1 = new DataGridView();
             lbltest = new Label();
-            btnUpdataData = new Button();
             ((System.ComponentModel.ISupportInitialize)dataGridView1).BeginInit();
             SuspendLayout();
             // 
@@ -58,6 +57,7 @@
             button1.TabIndex = 1;
             button1.Text = "Imprimir Reporte";
             button1.UseVisualStyleBackColor = false;
+            button1.Click += button1_Click;
             // 
             // abrirPuertaBtn
             // 
@@ -104,22 +104,11 @@
             lbltest.Text = "label2";
             lbltest.Click += lbltest_Click;
             // 
-            // btnUpdataData
-            // 
-            btnUpdataData.Location = new Point(821, 457);
-            btnUpdataData.Name = "btnUpdataData";
-            btnUpdataData.Size = new Size(94, 29);
-            btnUpdataData.TabIndex = 7;
-            btnUpdataData.Text = "button2";
-            btnUpdataData.UseVisualStyleBackColor = true;
-            btnUpdataData.Click += btnUpdataData_Click;
-            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(8F, 20F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1015, 540);
-            Controls.Add(btnUpdataData);
             Controls.Add(lbltest);
             Controls.Add(dataGridView1);
             Controls.Add(cerrarPuertaBtn);
@@ -141,7 +130,6 @@
         private Button cerrarPuertaBtn;
         private DataGridView dataGridView1;
         private Label lbltest;
-        private Button btnUpdataData;
     }
     partial class MainForm
     {
